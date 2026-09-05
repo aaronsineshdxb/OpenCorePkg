@@ -20,6 +20,61 @@
 
 STATIC
 BOOLEAN
+InternalFindPatternBmh (
+  IN CONST UINT8   *Pattern,
+  IN UINT32        PatternSize,
+  IN CONST UINT8   *Data,
+  IN UINT32        DataSize,
+  IN OUT UINT32    *DataOff
+  )
+{
+  UINT32  BadCharShift[256];
+  UINT32  CurrentOffset;
+  UINT32  LastOffset;
+  UINT32  Index;
+
+  ASSERT (DataSize >= PatternSize);
+  ASSERT (DataOff != NULL);
+
+  if (PatternSize == 0) {
+    return FALSE;
+  }
+
+  //
+  // Horspool's shift table skips windows that cannot contain the pattern.
+  // Keep the last pattern byte out of the table, as its default shift is
+  // PatternSize and its match is handled by the comparison below.
+  //
+  for (Index = 0; Index < ARRAY_SIZE (BadCharShift); ++Index) {
+    BadCharShift[Index] = PatternSize;
+  }
+
+  for (Index = 0; Index + 1 < PatternSize; ++Index) {
+    BadCharShift[Pattern[Index]] = PatternSize - Index - 1;
+  }
+
+  CurrentOffset = *DataOff;
+  LastOffset    = DataSize - PatternSize;
+
+  while (CurrentOffset <= LastOffset) {
+    Index = PatternSize;
+    while ((Index > 0) && (Data[CurrentOffset + Index - 1] == Pattern[Index - 1])) {
+      --Index;
+    }
+
+    if (Index == 0) {
+      *DataOff = CurrentOffset;
+      return TRUE;
+    }
+
+    CurrentOffset += BadCharShift[Data[CurrentOffset + PatternSize - 1]];
+  }
+
+  return FALSE;
+}
+
+STATIC
+BOOLEAN
 InternalFindPattern (
   IN CONST UINT8   *Pattern,
   IN CONST UINT8   *PatternMask OPTIONAL,
@@ -40,39 +95,28 @@ InternalFindPattern (
     return FALSE;
   }
 
+  // Masked patterns do not have a safe ordinary bad-character shift table.
+  // Retain the original linear matcher for that case.
+  if (PatternMask == NULL) {
+    return InternalFindPatternBmh (Pattern, PatternSize, Data, DataSize, DataOff);
+  }
+
   CurrentOffset = *DataOff;
   LastOffset    = DataSize - PatternSize;
 
-  if (PatternMask == NULL) {
-    while (CurrentOffset <= LastOffset) {
-      for (Index = 0; Index < PatternSize; ++Index) {
-        if (Data[CurrentOffset + Index] != Pattern[Index]) {
-          break;
-        }
+  while (CurrentOffset <= LastOffset) {
+    for (Index = 0; Index < PatternSize; ++Index) {
+      if ((Data[CurrentOffset + Index] & PatternMask[Index]) != Pattern[Index]) {
+        break;
       }
-
-      if (Index == PatternSize) {
-        *DataOff = CurrentOffset;
-        return TRUE;
-      }
-
-      ++CurrentOffset;
     }
-  } else {
-    while (CurrentOffset <= LastOffset) {
-      for (Index = 0; Index < PatternSize; ++Index) {
-        if ((Data[CurrentOffset + Index] & PatternMask[Index]) != Pattern[Index]) {
-          break;
-        }
-      }
 
-      if (Index == PatternSize) {
-        *DataOff = CurrentOffset;
-        return TRUE;
-      }
-
-      ++CurrentOffset;
+    if (Index == PatternSize) {
+      *DataOff = CurrentOffset;
+      return TRUE;
     }
+
+    ++CurrentOffset;
   }
 
   return FALSE;
